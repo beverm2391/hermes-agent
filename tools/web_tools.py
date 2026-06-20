@@ -16,6 +16,8 @@ Backend compatibility:
 - Firecrawl: https://docs.firecrawl.dev/introduction (search, extract; direct or derived firecrawl-gateway.<domain> for Nous Subscribers)
 - Parallel: https://docs.parallel.ai (search, extract)
 - Tavily: https://tavily.com (search, extract)
+- Crawl4AI: https://github.com/unclecode/crawl4ai (extract)
+- SearXNG: https://docs.searxng.org (search)
 
 LLM Processing:
 - Uses OpenRouter API with Gemini 3 Flash Preview for intelligent content extraction
@@ -149,7 +151,7 @@ def _get_backend() -> str:
     keys manually without running setup.
     """
     configured = (_load_web_config().get("backend") or "").lower().strip()
-    if configured in {"parallel", "firecrawl", "tavily", "exa", "searxng", "brave-free", "ddgs", "xai"}:
+    if configured in {"parallel", "firecrawl", "tavily", "exa", "crawl4ai", "searxng", "brave-free", "ddgs", "xai"}:
         return configured
 
     # Fallback for manual / legacy config — pick the highest-priority
@@ -165,6 +167,7 @@ def _get_backend() -> str:
         ("parallel", _has_env("PARALLEL_API_KEY")),
         ("firecrawl", _has_env("FIRECRAWL_API_KEY") or _has_env("FIRECRAWL_API_URL")),
         ("firecrawl", _is_tool_gateway_ready()),
+        ("crawl4ai", _has_env("CRAWL4AI_URL") and _has_env("CRAWL4AI_API_TOKEN")),
         ("searxng", _has_env("SEARXNG_URL")),
         ("brave-free", _has_env("BRAVE_SEARCH_API_KEY")),
         ("ddgs", _ddgs_package_importable()),
@@ -224,6 +227,8 @@ def _is_backend_available(backend: str) -> bool:
         return check_firecrawl_api_key()
     if backend == "tavily":
         return _has_env("TAVILY_API_KEY")
+    if backend == "crawl4ai":
+        return _has_env("CRAWL4AI_URL") and _has_env("CRAWL4AI_API_TOKEN")
     if backend == "searxng":
         return _has_env("SEARXNG_URL")
     if backend == "brave-free":
@@ -758,8 +763,8 @@ def clean_base64_images(text: str) -> str:
 def _ensure_web_plugins_loaded() -> None:
     """Idempotently trigger plugin discovery so the web registry is populated.
 
-    Every bundled web provider (brave-free, ddgs, searxng, exa, parallel,
-    tavily, firecrawl) registers itself via ``plugins/web/<vendor>/__init__.py``
+    Every bundled web provider (brave-free, ddgs, searxng, crawl4ai, exa,
+    parallel, tavily, firecrawl) registers itself via ``plugins/web/<vendor>/__init__.py``
     during plugin discovery. Tool dispatch can be reached from contexts that
     haven't already triggered discovery — subprocess agent runs, delegate
     children, standalone scripts, certain test paths — and without it the
@@ -978,8 +983,8 @@ async def web_extract_tool(
         else:
             backend = _get_extract_backend()
 
-            # All seven providers (brave-free, ddgs, searxng, exa, parallel,
-            # tavily, firecrawl) now live as plugins. The dispatcher is a
+            # Bundled providers (brave-free, ddgs, searxng, crawl4ai, exa,
+            # parallel, tavily, firecrawl) now live as plugins. The dispatcher is a
             # registry lookup + delegation. Some providers' extract() is
             # async (parallel, firecrawl), others sync (exa, tavily) — we
             # detect coroutine functions and await; sync functions run
@@ -1006,8 +1011,8 @@ async def web_extract_tool(
                             "error": (
                                 f"{provider.display_name} is a search-only "
                                 "backend and cannot extract URL content. "
-                                "Set web.extract_backend to firecrawl, "
-                                "tavily, exa, or parallel."
+                                "Set web.extract_backend to crawl4ai, "
+                                "firecrawl, tavily, exa, or parallel."
                             ),
                         },
                         ensure_ascii=False,
@@ -1019,8 +1024,8 @@ async def web_extract_tool(
                             "success": False,
                             "error": (
                                 "No web extract provider configured. "
-                                "Set web.extract_backend to firecrawl, "
-                                "tavily, exa, or parallel."
+                                "Set web.extract_backend to crawl4ai, "
+                                "firecrawl, tavily, exa, or parallel."
                             ),
                         },
                         ensure_ascii=False,
@@ -1185,11 +1190,11 @@ async def web_extract_tool(
 def check_web_api_key() -> bool:
     """Check whether the configured web backend is available."""
     configured = _load_web_config().get("backend", "").lower().strip()
-    if configured in {"exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs", "xai"}:
+    if configured in {"exa", "parallel", "firecrawl", "tavily", "crawl4ai", "searxng", "brave-free", "ddgs", "xai"}:
         return _is_backend_available(configured)
     return any(
         _is_backend_available(backend)
-        for backend in ("exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs", "xai")
+        for backend in ("exa", "parallel", "firecrawl", "tavily", "crawl4ai", "searxng", "brave-free", "ddgs", "xai")
     )
 
 
@@ -1227,6 +1232,8 @@ if __name__ == "__main__":
             print("   Using Tavily API (https://tavily.com)")
         elif backend == "searxng":
             print(f"   Using SearXNG (search only): {_env_value('SEARXNG_URL')}")
+        elif backend == "crawl4ai":
+            print(f"   Using Crawl4AI (extract only): {_env_value('CRAWL4AI_URL')}")
         elif backend == "brave-free":
             print("   Using Brave Search free tier (search only)")
         elif backend == "ddgs":
