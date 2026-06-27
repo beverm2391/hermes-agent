@@ -70,18 +70,19 @@ class TestCrawl4AIProviderExtract:
         with patch("httpx.post", return_value=self._mock_response(payload)) as post:
             result = Crawl4AIWebSearchProvider().extract(["https://example.com"])
 
-        assert result == [
-            {
-                "url": "https://example.com",
-                "title": "Example Domain",
-                "content": "# Example\nHello",
-                "raw_content": "<h1>Example</h1>",
-                "metadata": {"title": "Example Domain"},
-            }
-        ]
+        assert result[0]["url"] == "https://example.com"
+        assert result[0]["title"] == "Example Domain"
+        assert result[0]["content"] == "# Example\nHello"
+        assert result[0]["raw_content"] == "# Example\nHello"
+        assert result[0]["metadata"]["title"] == "Example Domain"
+        assert result[0]["metadata"]["content_chars"] == 15
+        assert result[0]["metadata"]["content_truncated"] is False
+        assert result[0]["metadata"]["raw_content_truncated"] is False
+        assert isinstance(result[0]["metadata"]["crawl4ai_elapsed_ms"], int)
         headers = post.call_args.kwargs["headers"]
         assert headers["Authorization"] == "Bearer test-token"
-        assert post.call_args.kwargs["json"]["cache_mode"] == "bypass"
+        crawler_params = post.call_args.kwargs["json"]["crawler_config"]["params"]
+        assert crawler_params["cache_mode"] == "bypass"
 
     def test_extract_handles_markdown_object_response(self, monkeypatch):
         monkeypatch.setenv("CRAWL4AI_URL", "http://localhost:11235/")
@@ -102,8 +103,66 @@ class TestCrawl4AIProviderExtract:
             result = Crawl4AIWebSearchProvider().extract(["https://example.com"])
 
         assert post.call_args.args[0] == "http://localhost:11235/crawl"
-        assert result[0]["content"] == "raw md"
-        assert result[0]["raw_content"] == "raw md"
+        assert result[0]["content"] == "fit md"
+        assert result[0]["raw_content"] == "fit md"
+
+    def test_extract_prefers_fit_markdown_over_raw_markdown(self, monkeypatch):
+        monkeypatch.setenv("CRAWL4AI_URL", "http://localhost:11235")
+        monkeypatch.setenv("CRAWL4AI_API_TOKEN", "test-token")
+        from plugins.web.crawl4ai.provider import Crawl4AIWebSearchProvider
+
+        payload = {
+            "results": [
+                {
+                    "url": "https://example.com",
+                    "fit_markdown": "filtered md",
+                    "markdown": {"raw_markdown": "raw md"},
+                    "metadata": {},
+                }
+            ]
+        }
+
+        with patch("httpx.post", return_value=self._mock_response(payload)):
+            result = Crawl4AIWebSearchProvider().extract(["https://example.com"])
+
+        assert result[0]["content"] == "filtered md"
+
+    def test_extract_does_not_silently_fall_back_to_html(self, monkeypatch):
+        monkeypatch.setenv("CRAWL4AI_URL", "http://localhost:11235")
+        monkeypatch.setenv("CRAWL4AI_API_TOKEN", "test-token")
+        from plugins.web.crawl4ai.provider import Crawl4AIWebSearchProvider
+
+        payload = {
+            "results": [
+                {
+                    "url": "https://example.com",
+                    "html": "<!doctype html><html><body>raw page</body></html>",
+                    "metadata": {},
+                }
+            ]
+        }
+
+        with patch("httpx.post", return_value=self._mock_response(payload)):
+            result = Crawl4AIWebSearchProvider().extract(["https://example.com"])
+
+        assert result[0]["content"] == ""
+        assert result[0]["raw_content"].startswith("<!doctype html>")
+        assert result[0]["metadata"]["markdown_missing"] is True
+        assert result[0]["error"] == "Crawl4AI returned HTML without markdown"
+
+    def test_extract_caps_huge_markdown_before_summarization(self, monkeypatch):
+        monkeypatch.setenv("CRAWL4AI_URL", "http://localhost:11235")
+        monkeypatch.setenv("CRAWL4AI_API_TOKEN", "test-token")
+        from plugins.web.crawl4ai.provider import Crawl4AIWebSearchProvider
+
+        huge = "x" * 70_000
+        payload = {"results": [{"url": "https://example.com", "markdown": huge}]}
+
+        with patch("httpx.post", return_value=self._mock_response(payload)):
+            result = Crawl4AIWebSearchProvider().extract(["https://example.com"])
+
+        assert len(result[0]["content"]) == 60_000
+        assert result[0]["metadata"]["content_truncated"] is True
 
     def test_missing_token_returns_per_url_error(self, monkeypatch):
         monkeypatch.setenv("CRAWL4AI_URL", "http://localhost:11235")
@@ -130,6 +189,24 @@ class TestCrawl4AIProviderExtract:
             result = Crawl4AIWebSearchProvider().extract(["https://example.com"])
 
         assert result[0]["error"] == "Crawl4AI returned HTTP 401"
+
+    def test_extract_sends_bounded_crawl_config(self, monkeypatch):
+        monkeypatch.setenv("CRAWL4AI_URL", "http://localhost:11235")
+        monkeypatch.setenv("CRAWL4AI_API_TOKEN", "test-token")
+        from plugins.web.crawl4ai.provider import Crawl4AIWebSearchProvider
+
+        payload = {"results": [{"url": "https://example.com", "markdown": "ok"}]}
+
+        with patch("httpx.post", return_value=self._mock_response(payload)) as post:
+            Crawl4AIWebSearchProvider().extract(["https://example.com"])
+
+        request = post.call_args.kwargs["json"]
+        assert request["browser_config"]["type"] == "BrowserConfig"
+        assert request["crawler_config"]["type"] == "CrawlerRunConfig"
+        crawler_params = request["crawler_config"]["params"]
+        assert crawler_params["cache_mode"] == "bypass"
+        assert crawler_params["page_timeout"] == 45_000
+        assert crawler_params["remove_overlay_elements"] is True
 
 
 @pytest.mark.usefixtures("web_registry_populated")
