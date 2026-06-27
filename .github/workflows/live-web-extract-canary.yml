@@ -1,0 +1,76 @@
+name: Live Web Extract Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      extract_backend:
+        description: "Configured extract backend to exercise"
+        required: true
+        default: "crawl4ai"
+      manifest_path:
+        description: "Canary manifest path in this checkout"
+        required: true
+        default: "tests/integration/live_web_extract_canary.yaml"
+      runner_label:
+        description: "Runner label; use a tailnet/self-hosted runner for private providers"
+        required: true
+        default: "ubuntu-latest"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-web-extract-canary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev
+
+      - name: Run live extract canary
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python -m pytest \
+            -o addopts='' \
+            -m 'integration and live_web_extract' \
+            tests/integration/test_live_web_extract_canary.py \
+            -vv
+        env:
+          LIVE_WEB_EXTRACT_CANARY: "1"
+          WEB_EXTRACT_BACKEND: ${{ inputs.extract_backend }}
+          WEB_EXTRACT_CANARY_MANIFEST: ${{ inputs.manifest_path }}
+          WEB_EXTRACT_CANARY_RESULTS: live_web_extract_canary_results.json
+          CRAWL4AI_URL: ${{ secrets.CRAWL4AI_URL }}
+          CRAWL4AI_API_TOKEN: ${{ secrets.CRAWL4AI_API_TOKEN }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          FIRECRAWL_API_URL: ${{ secrets.FIRECRAWL_API_URL }}
+          PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+
+      - name: Upload canary report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-web-extract-canary-results
+          path: live_web_extract_canary_results.json
+          if-no-files-found: warn

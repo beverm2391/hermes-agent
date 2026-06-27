@@ -1058,8 +1058,11 @@ async def web_extract_tool(
         
         debug_call_data["pages_extracted"] = pages_extracted
         debug_call_data["original_response_size"] = len(json.dumps(response))
-        effective_model = model or _get_default_summarizer_model()
-        auxiliary_available = check_auxiliary_model()
+        effective_model = None
+        auxiliary_available = False
+        if use_llm_processing:
+            effective_model = model or _get_default_summarizer_model()
+            auxiliary_available = check_auxiliary_model()
         
         # Process each result with LLM if enabled
         if use_llm_processing and auxiliary_available:

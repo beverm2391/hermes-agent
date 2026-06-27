@@ -159,6 +159,17 @@ _CREDENTIAL_NAMES = frozenset({
 })
 
 
+_LIVE_WEB_EXTRACT_ENV_VARS = frozenset({
+    "CRAWL4AI_URL",
+    "CRAWL4AI_API_TOKEN",
+    "EXA_API_KEY",
+    "FIRECRAWL_API_KEY",
+    "FIRECRAWL_API_URL",
+    "PARALLEL_API_KEY",
+    "TAVILY_API_KEY",
+})
+
+
 def _looks_like_credential(name: str) -> bool:
     """True if env var name matches a credential-shaped pattern."""
     if name in _CREDENTIAL_NAMES:
@@ -326,17 +337,34 @@ _HERMES_BEHAVIORAL_VARS = frozenset({
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_environment(tmp_path, monkeypatch):
+def _hermetic_environment(request, tmp_path, monkeypatch):
     """Blank out all credential/behavioral env vars so local and CI match.
 
     Also redirects HOME and HERMES_HOME to per-test tempdirs so code that
     reads ``~/.hermes/*`` can't touch the real one, and pins TZ/LANG so
     datetime/locale-sensitive tests are deterministic.
     """
+    live_web_extract_env = {}
+    if (
+        request.node.get_closest_marker("live_web_extract") is not None
+        and os.getenv("LIVE_WEB_EXTRACT_CANARY") == "1"
+    ):
+        # Live canaries are intentionally outside the hermetic unit-test lane.
+        # Preserve only the exact provider env vars needed to hit configured
+        # extraction services, then restore them after the blanket scrub below.
+        live_web_extract_env = {
+            name: os.environ[name]
+            for name in _LIVE_WEB_EXTRACT_ENV_VARS
+            if os.environ.get(name)
+        }
+
     # 1. Blank every credential-shaped env var that's currently set.
     for name in list(os.environ.keys()):
         if _looks_like_credential(name):
             monkeypatch.delenv(name, raising=False)
+
+    for name, value in live_web_extract_env.items():
+        monkeypatch.setenv(name, value)
 
     # 2. Blank behavioral HERMES_* vars that could change test semantics.
     for name in _HERMES_BEHAVIORAL_VARS:
